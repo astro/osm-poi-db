@@ -4,6 +4,7 @@ var AreaStream = require('./area_stream');
 var INTERESTING = ["amenity", "emergency", "historic", "leisure", "public_transport", "shop", "sport", "tourism", "craft", "office"];
 
 
+// TODO: filterByHasKey(INTERESTING), stream response as json
 exports.locateProximity = function(opts, cb) {
     var start = Date.now();
     var address, addressDistance, interesting = [];
@@ -29,13 +30,16 @@ exports.locateProximity = function(opts, cb) {
         }, {
             coordinates: [data.lat, data.lon]
         });
-        data._distance = Math.round(distance);
+        data._distance = distance;
+        // console.log("data", data);
 
         if (data.lat && data.lon &&
             (!address || distance < addressDistance) &&
             data['addr:housenumber']) {
 
-            address = {};
+            address = {
+                _distance: distance
+            };
             addressDistance = distance;
             Object.keys(data).forEach(function(k) {
                 var m;
@@ -65,21 +69,22 @@ var opts = {
     lon: 13.8072735,
     lat: 51.0519905,
     max: 1000,
-    maxRuntime: 300
+    maxRuntime: 100
 };
 function run() {
     var t1 = Date.now();
     exports.locateProximity(opts, function(err, addr, nodes) {
         var t2 = Date.now();
-        var a = addr.street + " " + addr.housenumber + ", " + (addr.postcode || "") + " " + addr.city;
+        var a = addr.street + " " + addr.housenumber + ", " + (addr.postcode || "") + " " + addr.city + " (" + Math.round(addr._distance) + "m)";
         var xs = nodes.filter(function(node) {
             return !!node.name;
         }).slice(0, 3).map(function(node) {
-            return node.name + " (" + node._distance + "m)";
+            return node.name + " (" + node.id + ", " + Math.round(node._distance) + "m)";
         }).join(", ");
-        console.log("cb", nodes.length, "[" + (t2 - t1) + "ms]", a, ":", xs);
+        console.log("cb", nodes.length, "[" + (t2 - t1) + "ms]", a, ":", xs, "..", Math.round(nodes[nodes.length - 1]._distance) + "m");
 
         opts.lon -= 0.0001;
+        opts.lat -= 0.00005;
         run();
     });
 }

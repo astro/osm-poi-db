@@ -137,8 +137,8 @@ DedupStream.prototype._transform = function(data, encoding, cb) {
     }
 
     data.forEach(function(d) {
-        if (!this.seen.hasOwnProperty(data)) {
-            this.seen[data] = true;
+        if (!this.seen.hasOwnProperty(d.id)) {
+            this.seen[d.id] = true;
             this.push(d);
         }
     }.bind(this));
@@ -172,16 +172,15 @@ function AreaStream(opts) {
 
     var gs = new GeoStream(opts);
     var ds = new DedupStream();
-    var ls = new LookupStream();
-    gs.pipe(ds).pipe(ls);
+    gs.pipe(ds);
 
-    ls.on('data', function(data) {
-        ls.pause();
+    ds.on('data', function(data) {
+        ds.pause();
         this.push(data);
     }.bind(this));
     gs.on('close', this.emit.bind(this, 'close'));
     this._read = function() {
-        ls.resume();
+        ds.resume();
     };
     this.destroy = gs.destroy.bind(gs);
 }

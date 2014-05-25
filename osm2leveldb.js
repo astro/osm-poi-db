@@ -22,7 +22,13 @@ function nub(a) {
     return Object.keys(elems);
 }
 
-function onLocation(lat, lon, ptr, cb) {
+function onLocation(lat, lon, body, cb) {
+    if (!INTERESTING.some(function(f) {
+        return body.hasOwnProperty(f);
+    })) {
+        return cb();
+    }
+
     var geohash = GeoHash.encodeGeoHash(lat, lon);
     var geoKey = "geo:" + geohash;
     db.get(geoKey, function(err, data) {
@@ -30,61 +36,56 @@ function onLocation(lat, lon, ptr, cb) {
             return cb(err);
         }
 
-        data = data || [];
-        if (data.indexOf(ptr) < 0) {
-            data.push(ptr);
-            db.put(geoKey, data, function(err) {
-                cb(err);
-            });
-        } else {
-            cb();
-        }
+        data = (data || []).filter(function(d) {
+            return d.id !== body.id;
+        });
+        data.push(body);
+        // console.log("put", geoKey, ":", data.length);
+        db.put(geoKey, data, cb);
     });
 }
 
 function onElement(type, body, cb) {
-    function go(cb) {
-        var ptr = type + ":" + body.id;
-        db.put(ptr, body, function(err) {
-            if (!err && body.lat && body.lon) {
-                onLocation(body.lat, body.lon, ptr, cb);
-            } else {
-                cb(err);
-            }
-        });
-    }
+    body._element = type;
 
     if (body && body.lat && body.lon) {
-        go(cb);
+        db.put("p:" + body.id, {
+            lat: body.lat,
+            lon: body.lon
+        }, function(err) {
+            if (err) {
+                cb(err)
+            } else {
+                onLocation(body.lat, body.lon, body, cb);
+            }
+        });
     } else if (body.nd && body.nd.length > 0) {
         var lon = 0, lat = 0, len = 0;
+        // TODO: when using a writeStream, wait for nextTick to have
+        // all preceding p:* flushed out
         async.each(body.nd, function(id, cb) {
-            db.get("node:" + id, function(err, data) {
-                if (err && err.notFound) {
-                    return cb();
+            db.get("p:" + id, function(err, data) {
+                if (data) {
+                    lon += Number(data.lon);
+                    lat += Number(data.lat);
+                    len++;
+                } else {
+                    console.log("get p:" + body.id, err, data);
                 }
-                if (err) {
-                    return cb(err);
-                }
-                lon += Number(data.lon);
-                lat += Number(data.lat);
-                len++;
                 cb();
             });
         }, function(err) {
-            if (err) {
-                return cb(err);
-            }
-
             if (len > 0) {
                 body.lon = lon / len;
                 body.lat = lat / len;
                 // console.log("looked up", body.lon, "/", body.lat, "from", len);
-                go(cb);
+                onLocation(body.lat, body.lon, body, cb);
             } else {
+                console.log("No location for", body);
                 cb();
             }
         });
+
     } else {
         if (type == 'node' || type == 'way') {
             console.log("No location for " + type + ":", body);
@@ -103,8 +104,12 @@ parser.on('startElement', function(name, attrs) {
         current = attrs;
         state = name;
 
-    } else if (state && name == 'tag' && !current.hasOwnProperty(attrs.k)) {
-        current[attrs.k] = attrs.v;
+    } else if (state && name == 'tag') {
+        if (!current.hasOwnProperty(attrs.k)) {
+            current[attrs.k] = attrs.v;
+        } else {
+            console.log("ignore duplicate tag", attrs.k + "=" + attrs.v, "current:", current[attrs.k]);
+        }
     } else if (state && name == 'nd') {
         if (!current.nd) {
             current.nd = [];
@@ -122,9 +127,7 @@ parser.on('startElement', function(name, attrs) {
 var pending = 0;
 parser.on('endElement', function(name) {
     if (state && name == state) {
-        var interested = true; /*INTERESTING.some(function(field) {
-            return current.hasOwnProperty(field);
-        });*/
+        var interested = true;
 
         if (interested) {
             onElement(state, current, function(err) {
@@ -155,4 +158,26 @@ parser.on('end', function() {
 });
 process.stdin.on('end', function() {
     console.log("Fin.");
+
+    // delete p:*
+    var deleted = 0;
+    var pStream = db.createReadStream({ start: "p:" });
+    pStream.on('data', function(data) {
+        if (/^p:/.test(data.key)) {
+            pStream.pause();
+            db.del(data.key, function(err) {
+                if (err) {
+                    console.error(err);
+                    throw err;
+                }
+                deleted++;
+                pStream.resume();
+            });
+        } else {
+            pStream.destroy();
+        }
+    });
+    pStream.on('close', function() {
+        console.log("Deleted", deleted, "intermediate items");
+    });
 });

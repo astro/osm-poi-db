@@ -8,6 +8,32 @@ var db = levelup('./osm', {
     valueEncoding: 'json'
 });
 
+util.inherits(PrefixStream, stream.Readable);
+function PrefixStream(prefix) {
+    stream.Readable.call(this, {
+        objectMode: true
+    });
+
+    var rs = db.createReadStream({
+        start: prefix
+    });
+    this._read = function() {
+        rs.resume();
+    };
+    rs.on('data', function(data) {
+        rs.pause();
+        if (data.key.indexOf(prefix) !== 0) {
+            rs.destroy();
+        } else {
+            this.push(data);
+        }
+    }.bind(this));
+    rs.on('close', function() {
+        this.push(null);
+    }.bind(this));
+}
+
+var EXTENT = 1000;  // 1km
 
 util.inherits(GeoStream, stream.Readable);
 function GeoStream(options) {
@@ -15,112 +41,60 @@ function GeoStream(options) {
         objectMode: true
     });
 
-    var geoKey = "geo:" + GeoHash.encodeGeoHash(options.lat, options.lon);
-    this.distanceTo = function(geohash) {
-        var coords = GeoHash.decodeGeoHash(geohash);
-        return WGS84Util.distanceBetween({
+    var extent = options.extent || EXTENT;
+    var getAway = function(brng) {
+        return WGS84Util.destinationPoint({
             coordinates: [options.lat, options.lon]
-        }, {
-            coordinates: [coords.latitude[2], coords.longitude[2]]
-        });
+        }, brng, extent).coordinates;
     };
-
-    this.minMaxDistanceIndex = 0;
-    this.streamsMaxDistances = [0, 0];
-
+    var bounds = {
+        n: Number(getAway(0)[0]),
+        e: Number(getAway(90)[1]),
+        s: Number(getAway(180)[0]),
+        w: Number(getAway(270)[1])
+    };
+    
+    this.streams = [];
     var that = this;
-    function makeStream(opts) {
-        var stream = db.createReadStream(opts);
-        stream.on('data', function(data) {
-            // console.log("db data", data);
-            var shouldProceed = that.handleData(stream, data.key, data.value);
-            if (shouldProceed) {
-                stream.pause();  // Wait for next read
-                that.push(data.value);
+    var addStream = function(prefix) {
+        var ps = new PrefixStream(prefix);
+        ps.on('data', function(data) {
+            // console.log("ps data", data.key);
+            ps.pause();  // Wait for next read
+            that.push(data.value);
+        });
+        ps.on('end', function() {
+            var i = that.streams.indexOf(ps);
+            that.streams.splice(i, 1);
+            // console.log("spliced", i, "from", that.streams.length+1);
+            if (that.streams.length < 1) {
+                that.push(null);
             } else {
-                stream.destroy();
-                var i = that.streams.indexOf(stream);
-                that.streams.splice(i, 1);
-                that.streamsMaxDistances.splice(i, 1);
-                // console.log("spliced", i, "from", that.streams.length+1);
-                if (that.streams.length < 1) {
-                    that.push(null);
-                } else {
-                    that.minMaxDistanceIndex = 0;
-                    that.read(0);
-                }
+                that.read(0);
             }
         });
-        return stream;
+        that.streams.push(ps);
     }
+    for(var lon = bounds.w; lon <= bounds.e; ) {
+        var nextLon;
+        for(var lat = bounds.s; lat <= bounds.n; ) {
+            var geoHash = GeoHash.encodeGeoHash(lat, lon).slice(0, 6);
+            addStream("geo:" + geoHash);
 
-    this.streams = [
-        makeStream({
-            start: geoKey,
-            reverse: true
-        }),
-        makeStream({
-            start: geoKey
-        })
-    ];
+            var decoded = GeoHash.decodeGeoHash(geoHash);
+            // console.log("stream", geoHash, "decoded", decoded);
+            lat = decoded.latitude[1] + 0.00000001;
+            nextLon = decoded.longitude[1] + 0.0000001;
+        }
+        lon = nextLon;
+    }
+    // console.log("bounds", bounds, this.streams.length + " prefix streams");
 }
 
 GeoStream.prototype._read = function(amount) {
-    // console.log("resume", this.minMaxDistanceIndex);
-    var stream = this.streams[this.minMaxDistanceIndex] ||
-        this.streams[0];
-    if (stream) {
-        stream.resume();
-    }
-};
-
-GeoStream.prototype.handleData = function(stream, key, value) {
-    if ((m = key.match(/^geo:(.+)/))) {
-
-        var streamIndex = this.streams.indexOf(stream);
-        var newMaxDistance = false;
-        var d = this.distanceTo(m[1]);
-        value._distance = d;
-        if (d > this.streamsMaxDistances[streamIndex]) {
-            // console.log("newMaxDistance", d);
-            this.streamsMaxDistances[streamIndex] = d;
-            newMaxDistance = true;
-        }
-
-        if (newMaxDistance) {
-            /* Find minimum in streamsMaxDistance */
-            this.minMaxDistanceIndex = 0;
-            var minMaxDistance = this.streamsMaxDistances[0];
-            for(var i = 1; i < this.streams.length; i++) {
-                if (this.streamsMaxDistances[i] < minMaxDistance) {
-                    minMaxDistance = this.streamsMaxDistances[i];
-                    this.minMaxDistanceIndex = i;
-                }
-            }
-        }
-
-        return true;
-    } else {
-        console.log("Stop at key", key);
-        return false;
-    }
-};
-
-GeoStream.prototype.destroy = function() {
-    var pending = 1;
-    var onClose = function() {
-        pending--;
-        if (pending < 1) {
-            this.emit('close');
-        }
-    }.bind(this);
     this.streams.forEach(function(stream) {
-        stream.on('close', onClose);
-        pending++;
-        stream.destroy();
+        stream.resume();
     });
-    this.streams = [];
-    onClose();
 };
 
 util.inherits(DedupStream, stream.Transform);
@@ -147,23 +121,6 @@ DedupStream.prototype._transform = function(data, encoding, cb) {
 };
 
 
-util.inherits(LookupStream, stream.Transform);
-function LookupStream() {
-    stream.Transform.call(this, {
-        objectMode: true
-    });
-}
-
-LookupStream.prototype._transform = function(data, encoding, cb) {
-    db.get(data, function(err, data) {
-        if (data) {
-            this.push(data);
-        }
-        cb(err);
-    }.bind(this));
-};
-
-
 util.inherits(AreaStream, stream.Readable);
 function AreaStream(opts) {
     stream.Readable.call(this, {
@@ -178,11 +135,12 @@ function AreaStream(opts) {
         ds.pause();
         this.push(data);
     }.bind(this));
-    gs.on('close', this.emit.bind(this, 'close'));
     this._read = function() {
         ds.resume();
     };
-    this.destroy = gs.destroy.bind(gs);
+    ds.on('end', function() {
+        this.push(null);
+    }.bind(this));
 }
 
 module.exports = AreaStream;

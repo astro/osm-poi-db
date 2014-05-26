@@ -10,15 +10,16 @@ var app = express();
 
 app.use(connect.compress());
 
-app.get('/lookup/:lat/:lon', function(req, res) {
+app.get('/lookup/:lat/:lon/:range', function(req, res) {
     var start = Date.now();
     var lat = Number(req.param('lat'));
     var lon = Number(req.param('lon'));
-    console.log("lookup", lat, lon);
+    var range = Math.min(5000, Number(req.param('range')));
+    console.log("lookup", lat, lon, range);
     var as = new AreaStream({
         lat: lat,
         lon: lon,
-        extent: 500
+        extent: range
     });
     res.writeHead(200, {
         'Content-Type': "application/json"
@@ -47,7 +48,7 @@ app.get('/lookup/:lat/:lon', function(req, res) {
             });
         };
 
-        var isInterested = INTERESTING.some(function(f) {
+        var isInterested = distance <= range && INTERESTING.some(function(f) {
             return data.hasOwnProperty(f);
         });
         if (isInterested) {

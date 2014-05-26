@@ -1,3 +1,4 @@
+/* This is an example */
 var WGS84Util = require('wgs84-util');
 var AreaStream = require('./area_stream');
 
@@ -20,10 +21,14 @@ exports.locateProximity = function(opts, cb) {
 
         if (data.lat && data.lon &&
             (!address || distance < addressDistance) &&
-            data['addr:housenumber']) {
+            data['addr:street'] && data['addr:housenumber']) {
 
             address = {
-                _distance: distance
+                _distance: distance,
+                // some fields default to these of nodes in the proximity
+                city: address && address.city,
+                state: address && address.state,
+                country: address && address.country
             };
             addressDistance = distance;
             Object.keys(data).forEach(function(k) {
@@ -68,13 +73,13 @@ function run() {
     var t1 = Date.now();
     exports.locateProximity(opts, function(err, addr, nodes) {
         var t2 = Date.now();
-        var a = addr.street + " " + addr.housenumber + ", " + (addr.postcode || "") + " " + addr.city + " (" + Math.round(addr._distance) + "m)";
+        var a = addr && addr.street + " " + addr.housenumber + ", " + (addr.postcode || "") + " " + addr.city + " (" + Math.round(addr._distance) + "m)";
         var xs = nodes.filter(function(node) {
             return !!node.name;
         }).slice(0, 3).map(function(node) {
             return node.name + " (" + node.id + ", " + Math.round(node._distance) + "m)";
         }).join(", ");
-        console.log("cb", nodes.length, "[" + (t2 - t1) + "ms]", a, ":", xs, "..", Math.round(nodes[nodes.length - 1]._distance) + "m");
+        console.log("cb", nodes.length, "json:", JSON.stringify(nodes).length, "[" + (t2 - t1) + "ms]", a, ":", xs, "..", nodes.length > 0 && Math.round(nodes[nodes.length - 1]._distance) + "m");
 
         opts.lon -= 0.0001;
         opts.lat -= 0.000025;

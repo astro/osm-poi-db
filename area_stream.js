@@ -79,6 +79,7 @@ function GeoStream(options) {
         var nextLon;
         for(var lat = bounds.s; lat <= bounds.n; ) {
             var geoHash = GeoHash.encodeGeoHash(lat, lon).slice(0, 6);
+            // TODO: maybe not start all at once
             addStream("geo:" + geoHash);
 
             var decoded = GeoHash.decodeGeoHash(geoHash);

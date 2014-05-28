@@ -98,50 +98,5 @@ GeoStream.prototype._read = function(amount) {
     });
 };
 
-util.inherits(DedupStream, stream.Transform);
-function DedupStream() {
-    stream.Transform.call(this, {
-        objectMode: true
-    });
-    this.seen = {};
-}
 
-DedupStream.prototype._transform = function(data, encoding, cb) {
-    if (data.constructor !== Array) {
-        data = [data];
-    }
-
-    data.forEach(function(d) {
-        if (!this.seen.hasOwnProperty(d.id)) {
-            this.seen[d.id] = true;
-            this.push(d);
-        }
-    }.bind(this));
-
-    cb();
-};
-
-
-util.inherits(AreaStream, stream.Readable);
-function AreaStream(opts) {
-    stream.Readable.call(this, {
-        objectMode: true
-    });
-
-    var gs = new GeoStream(opts);
-    var ds = new DedupStream();
-    gs.pipe(ds);
-
-    ds.on('data', function(data) {
-        ds.pause();
-        this.push(data);
-    }.bind(this));
-    this._read = function() {
-        ds.resume();
-    };
-    ds.on('end', function() {
-        this.push(null);
-    }.bind(this));
-}
-
-module.exports = AreaStream;
+module.exports = GeoStream;

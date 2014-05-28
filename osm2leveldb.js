@@ -30,19 +30,8 @@ function onLocation(lat, lon, body, cb) {
     }
 
     var geohash = GeoHash.encodeGeoHash(lat, lon);
-    var geoKey = "geo:" + geohash;
-    db.get(geoKey, function(err, data) {
-        if (err && !err.notFound) {
-            return cb(err);
-        }
-
-        data = (data || []).filter(function(d) {
-            return d.id !== body.id;
-        });
-        data.push(body);
-        // console.log("put", geoKey, ":", data.length);
-        db.put(geoKey, data, cb);
-    });
+    var key = "geo:" + geohash + ":" + body.id;
+    db.put(key, body, cb);
 }
 
 function onElement(type, body, cb) {
@@ -124,6 +113,7 @@ parser.on('startElement', function(name, attrs) {
         console.log('in', state, 'unhandled startElement', name, attrs);
     }
 });
+var CONCURRENCY = 1024;
 var pending = 0;
 parser.on('endElement', function(name) {
     if (state && name == state) {
@@ -135,12 +125,12 @@ parser.on('endElement', function(name) {
                 if (err) {
                     throw err;
                 }
-                if (pending < 4) {
+                if (pending < CONCURRENCY) {
                     process.stdin.resume();
                 }
             });
             pending++;
-            if (pending >= 4) {
+            if (pending >= CONCURRENCY) {
                 process.stdin.pause();
             }
         }

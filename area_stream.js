@@ -53,49 +53,46 @@ function GeoStream(options) {
         s: Number(getAway(180)[0]),
         w: Number(getAway(270)[1])
     };
-    
-    this.streams = [];
-    var that = this;
-    var addStream = function(prefix) {
-        var ps = new PrefixStream(prefix);
-        ps.on('data', function(data) {
-            // console.log("ps data", data.key);
-            ps.pause();  // Wait for next read
-            that.push(data.value);
-        });
-        ps.on('end', function() {
-            var i = that.streams.indexOf(ps);
-            that.streams.splice(i, 1);
-            // console.log("spliced", i, "from", that.streams.length+1);
-            if (that.streams.length < 1) {
-                that.push(null);
-            } else {
-                that.read(0);
-            }
-        });
-        that.streams.push(ps);
-    }
+
+    this.prefixes = [];
     for(var lon = bounds.w; lon <= bounds.e; ) {
         var nextLon;
         for(var lat = bounds.s; lat <= bounds.n; ) {
             var geoHash = GeoHash.encodeGeoHash(lat, lon).slice(0, 6);
-            // TODO: maybe not start all at once
-            addStream("geo:" + geoHash);
+            this.prefixes.push("geo:" + geoHash);
 
             var decoded = GeoHash.decodeGeoHash(geoHash);
-            // console.log("stream", geoHash, "decoded", decoded);
             lat = decoded.latitude[1] + 0.00000001;
             nextLon = decoded.longitude[1] + 0.0000001;
         }
         lon = nextLon;
     }
-    // console.log("bounds", bounds, this.streams.length + " prefix streams");
 }
 
 GeoStream.prototype._read = function(amount) {
-    this.streams.forEach(function(stream) {
-        stream.resume();
-    });
+    var that = this;
+
+    if (!this.stream) {
+        var nextPrefix = this.prefixes.pop();
+        if (nextPrefix) {
+            // console.log("new PrefixStream", nextPrefix, "of", this.prefixes.length + 1);
+            var ps = new PrefixStream(nextPrefix);
+            ps.on('data', function(data) {
+                ps.pause();  // Wait for next read
+                that.push(data.value);
+            });
+            ps.on('end', function() {
+                that.stream = null;
+                that._read();
+            });
+            this.stream = ps;
+        } else {
+            this.push(null);
+            return;
+        }
+    }
+
+    this.stream.resume();
 };
 
 

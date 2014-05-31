@@ -1,11 +1,17 @@
 var async = require('async');
-var expat = require('node-expat');
+var parseOSM = require('osm-pbf-parser');
 var GeoHash = require('geohash').GeoHash;
 var levelup = require('levelup');
 var db = levelup('./osm', {
     keyEncoding: 'utf8',
     valueEncoding: 'json'
 });
+var pDb = levelup('./osm.points', {
+    keyEncoding: 'utf8',
+    valueEncoding: 'json'
+});
+var Transform = require('stream').Transform;
+var util = require('util');
 
 var INTERESTING = [
     "amenity", "emergency", "historic",
@@ -14,160 +20,87 @@ var INTERESTING = [
     "office", "addr:street", "addr:housenumber"
 ];
 
-function nub(a) {
-    var elems = {};
-    a.forEach(function(e) {
-        elems[e] = true;
-    });
-    return Object.keys(elems);
+
+util.inherits(DBSink, Transform);
+function DBSink() {
+    Transform.call(this, { objectMode: true });
 }
 
-function onLocation(lat, lon, body, cb) {
-    if (!INTERESTING.some(function(f) {
-        return body.hasOwnProperty(f);
-    })) {
-        return cb();
+DBSink.prototype._transform = function(data, encoding, callback) {
+    if (data.type === 'nodes') {
+        async.each(data.nodes, function(node, cb) {
+            node._type = 'node';
+            this.onElement(node, cb);
+        }.bind(this), callback);
+    } else if (data.type === 'way') {
+        data._type = 'way';
+        this.onElement(data.way, callback);
     }
+};
 
-    var geohash = GeoHash.encodeGeoHash(lat, lon);
-    var key = "geo:" + geohash + ":" + body.id;
-    db.put(key, body, cb);
-}
-
-function onElement(type, body, cb) {
-    body._element = type;
-
-    if (body && body.lat && body.lon) {
-        db.put("p:" + body.id, {
-            lat: body.lat,
-            lon: body.lon
+DBSink.prototype.onElement = function(value, cb) {
+    if (value.lat && value.lon) {
+        pDb.put("p:" + value.id, {
+            lat: value.lat,
+            lon: value.lon
         }, function(err) {
-            if (err) {
-                cb(err)
-            } else {
-                onLocation(body.lat, body.lon, body, cb);
-            }
-        });
-    } else if (body.nd && body.nd.length > 0) {
+            this.pushElement(value);
+            cb(err);
+        }.bind(this));
+    } else if (value.ref && value.ref.length > 0) {
         var lon = 0, lat = 0, len = 0;
-        // TODO: when using a writeStream, wait for nextTick to have
-        // all preceding p:* flushed out
-        async.each(body.nd, function(id, cb) {
-            db.get("p:" + id, function(err, data) {
+        async.each(value.nd, function(id, cb) {
+            pDb.get("p:" + id, function(err, data) {
                 if (data) {
-                    lon += Number(data.lon);
-                    lat += Number(data.lat);
+                    lon += data.lon;
+                    lat += data.lat;
                     len++;
                 } else {
-                    console.log("get p:" + body.id, err, data);
+                    console.log("get p:" + id, err, data);
                 }
                 cb();
             });
         }, function(err) {
             if (len > 0) {
-                body.lon = lon / len;
-                body.lat = lat / len;
-                // console.log("looked up", body.lon, "/", body.lat, "from", len);
-                onLocation(body.lat, body.lon, body, cb);
+                value.lon = lon / len;
+                value.lat = lat / len;
+                // console.log("looked up", value.lon, "/", value.lat, "from", len);
+                this.pushElement(value);
             } else {
-                console.log("No location for", body);
+                console.log("No location for", value);
                 cb();
             }
-        });
-
+        }.bind(this), cb);
     } else {
-        if (type == 'node' || type == 'way') {
-            console.log("No location for " + type + ":", body);
-        }
+        console.log("No location for", value);
         cb();
     }
-}
+};
 
-var parser = new expat.Parser();
-var state, current;
-parser.on('startElement', function(name, attrs) {
-    if (!state && 
-        (name == 'node' ||
-         name == 'way' ||
-         name == 'relation')) {
-        current = attrs;
-        state = name;
-
-    } else if (state && name == 'tag') {
-        if (!current.hasOwnProperty(attrs.k)) {
-            current[attrs.k] = attrs.v;
-        } else {
-            console.log("ignore duplicate tag", attrs.k + "=" + attrs.v, "current:", current[attrs.k]);
-        }
-    } else if (state && name == 'nd') {
-        if (!current.nd) {
-            current.nd = [];
-        }
-        current.nd.push(attrs.ref);
-    } else if (state && name == 'member') {
-        if (!current.members) {
-            current.members = [];
-        }
-        current.members.push(attrs);
-    } else {
-        console.log('in', state, 'unhandled startElement', name, attrs);
+DBSink.prototype.pushElement = function(value) {
+    var isInteresting = INTERESTING.some(function(field) {
+        return value.tags.hasOwnProperty(field);
+    });
+    if (isInteresting) {
+        var geohash = GeoHash.encodeGeoHash(value.lat, value.lon);
+        var key = "geo:" + geohash + ":" + value.id;
+        this.push({ key: key, value: value });
     }
-});
-var CONCURRENCY = 1024;
-var pending = 0;
-parser.on('endElement', function(name) {
-    if (state && name == state) {
-        var interested = true;
+};
 
-        if (interested) {
-            onElement(state, current, function(err) {
-                pending--;
-                if (err) {
-                    throw err;
-                }
-                if (pending < CONCURRENCY) {
-                    process.stdin.resume();
-                }
-            });
-            pending++;
-            if (pending >= CONCURRENCY) {
-                process.stdin.pause();
-            }
-        }
 
-        state = null;
-        current = null;
-    }
-});
+var dbSink = new DBSink();
+var osm = parseOSM();
 
-process.stdin.resume();
-process.stdin.pipe(parser);
+process.stdin
+    .pipe(osm)
+    .pipe(dbSink)
+    .pipe(db.createWriteStream());
 
-parser.on('end', function() {
-    console.log("endDocument");
+osm.on('end', function() {
+    console.log("osm end");
+
 });
 process.stdin.on('end', function() {
-    console.log("Fin.");
-
-    // delete p:*
-    var deleted = 0;
-    var pStream = db.createReadStream({ start: "p:" });
-    pStream.on('data', function(data) {
-        if (/^p:/.test(data.key)) {
-            pStream.pause();
-            db.del(data.key, function(err) {
-                if (err) {
-                    console.error(err);
-                    throw err;
-                }
-                deleted++;
-                pStream.resume();
-            });
-        } else {
-            pStream.destroy();
-        }
-    });
-    pStream.on('close', function() {
-        console.log("Deleted", deleted, "intermediate items");
-    });
+    console.log("Fin stdin.");
 });

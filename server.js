@@ -28,28 +28,29 @@ app.get('/lookup/:lat/:lon/:range', function(req, res) {
 
     var address, addressDistance, interestingCount = 0;
     as.on('data', function(data) {
+        var tags = data.tags;
         var distance = WGS84Util.distanceBetween({
             coordinates: [lat, lon]
         }, {
             coordinates: [data.lat, data.lon]
         });
         if ((!address || distance < addressDistance) &&
-            data['addr:street'] && data['addr:housenumber']) {
+            tags['addr:street'] && tags['addr:housenumber']) {
 
             addressDistance = distance;
             address = {
                 _distance: distance
             };
-            Object.keys(data).forEach(function(k) {
+            Object.keys(tags).forEach(function(k) {
                 var m;
                 if ((m = k.match(/^addr:(.+)/))) {
-                    address[m[1]] = data[k];
+                    address[m[1]] = tags[k];
                 }
             });
         };
 
         var isInterested = distance <= range && INTERESTING.some(function(f) {
-            return data.hasOwnProperty(f);
+            return tags.hasOwnProperty(f);
         });
         if (isInterested) {
             if (interestingCount > 0) {

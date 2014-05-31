@@ -21,7 +21,7 @@ exports.locateProximity = function(opts, cb) {
 
         if (data.lat && data.lon &&
             (!address || distance < addressDistance) &&
-            data['addr:street'] && data['addr:housenumber']) {
+            data.tags['addr:street'] && data.tags['addr:housenumber']) {
 
             address = {
                 _distance: distance,
@@ -31,16 +31,16 @@ exports.locateProximity = function(opts, cb) {
                 country: address && address.country
             };
             addressDistance = distance;
-            Object.keys(data).forEach(function(k) {
+            Object.keys(data.tags).forEach(function(k) {
                 var m;
                 if ((m = k.match(/^addr:(.+)/))) {
-                    address[m[1]] = data[k];
+                    address[m[1]] = data.tags[k];
                 }
             });
         }
 
         var isInterested = INTERESTING.some(function(f) {
-            return data.hasOwnProperty(f);
+            return data.tags.hasOwnProperty(f);
         });
         if (isInterested) {
             interesting.push(data);
@@ -75,14 +75,14 @@ function run() {
         var t2 = Date.now();
         var a = addr && addr.street + " " + addr.housenumber + ", " + (addr.postcode || "") + " " + addr.city + " (" + Math.round(addr._distance) + "m)";
         var xs = nodes.filter(function(node) {
-            return !!node.name;
-        }).slice(0, 3).map(function(node) {
-            return node.name + " (" + node.id + ", " + Math.round(node._distance) + "m)";
+            return !!node.tags.name;
+        }).slice(0, 5).map(function(node) {
+            return node.tags.name + " (" + Math.round(node._distance) + "m)";
         }).join(", ");
-        console.log("cb", nodes.length, "json:", JSON.stringify(nodes).length, "[" + (t2 - t1) + "ms]", a, ":", xs, "..", nodes.length > 0 && Math.round(nodes[nodes.length - 1]._distance) + "m");
+        console.log("cb", nodes.length, "json:", JSON.stringify(nodes).length, "[" + (t2 - t1) + "ms]", a, ":", xs);
 
-        opts.lon -= 0.0001;
-        opts.lat -= 0.000025;
+        opts.lon -= 0.001;
+        opts.lat -= 0.00025;
         run();
     });
 }

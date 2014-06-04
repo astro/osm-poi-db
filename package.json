@@ -1,5 +1,6 @@
 {
-  "name": "kompass",
+  "name": "osm-poi-db",
+  "description": "Extract POIs from OSM PBFs and put them into LevelDB, ready for nearby query",
   "version": "0.0.0",
   "description": "",
   "main": "index.js",
@@ -12,11 +13,8 @@
     "geohash": "~0.0.1",
     "levelup": "~0.18.3",
     "leveldown": "~0.10.2",
-    "osm-pbf-parser": "~1.1.0",
+    "osm-pbf-parser": "~1.1.1",
     "async": "~0.9.0",
-    "wgs84-util": "~1.0.0",
-    "ltx": "~0.5.0",
-    "express": "~4.3.1",
-    "connect": "~2.17.1"
+    "wgs84-util": "~1.0.0"
   }
 }

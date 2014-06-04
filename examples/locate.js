@@ -1,6 +1,6 @@
 /* This is an example */
 var WGS84Util = require('wgs84-util');
-var AreaStream = require('./area_stream');
+var AreaStream = require('../area_stream');
 
 var INTERESTING = ["amenity", "emergency", "historic", "leisure", "public_transport", "shop", "sport", "tourism", "craft", "office"];
 

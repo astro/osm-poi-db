@@ -3,7 +3,6 @@ var parseOSM = require('osm-pbf-parser');
 var GeoHash = require('geohash').GeoHash;
 var leveldown = require('leveldown');
 var db = leveldown('./osm');
-var pDb = leveldown('./osm.points');
 var Transform = require('stream').Transform;
 var Writable = require('stream').Writable;
 var util = require('util');
@@ -15,37 +14,38 @@ var INTERESTING = [
     "office", "addr:street", "addr:housenumber"
 ];
 
-var CONCURRENCY = 16;
+var CONCURRENCY = 8;
 
-util.inherits(ToDB, Transform);
-function ToDB() {
+util.inherits(Expander, Transform);
+function Expander() {
     Transform.call(this, { objectMode: true, highWaterMark: CONCURRENCY });
 }
 
-ToDB.prototype._transform = function(chunk, encoding, callback) {
+Expander.prototype._transform = function(chunk, encoding, callback) {
     if (chunk.type === 'nodes') {
-        async.eachLimit(chunk.nodes, CONCURRENCY, function(node, cb) {
+        chunk.nodes.forEach(function(node) {
             node._type = 'node';
-            this.onElement(node, cb);
-        }.bind(this), callback);
+            this.push(node);
+        }.bind(this));
+        callback();
     } else if (chunk.type === 'way') {
         chunk.way._type = 'way';
-        this.onElement(chunk.way, callback);
+        this.expandWay(chunk.way, function(way) {
+            if (way.lat && way.lon) {
+                this.push(way);
+            }
+            callback();
+        }.bind(true));
+    } else {
+        callback();
     }
 };
 
-ToDB.prototype.onElement = function(value, cb) {
-    if (value.lat && value.lon) {
-        pDb.put("p:" + value.id, JSON.stringify({
-            lat: value.lat,
-            lon: value.lon
-        }), function(err) {
-            this.pushElement(value, cb);
-        }.bind(this));
-    } else if (value.ref && value.ref.length > 0) {
+Expander.prototype.expandWay = function(way, callback) {
+    if (way.ref && way.ref.length > 0) {
         var lon = 0, lat = 0, len = 0;
-        async.eachLimit(value.nd, CONCURRENCY, function(id, cb) {
-            pDb.get("p:" + id, function(err, data) {
+        async.eachLimit(way.nd, CONCURRENCY, function(id, cb) {
+            db.get("p:" + id, function(err, data) {
                 if (data) {
                     data = JSON.parse(data.toString());
                     lon += data.lon;
@@ -58,36 +58,51 @@ ToDB.prototype.onElement = function(value, cb) {
             });
         }, function(err) {
             if (len > 0) {
-                value.lon = lon / len;
-                value.lat = lat / len;
-                console.log("looked up", value.lon, "/", value.lat, "from", len);
-                this.pushElement(value, cb);
+                way.lon = lon / len;
+                way.lat = lat / len;
+                // console.log("looked up", way.lon, "/", way.lat, "from", len);
             } else {
-                console.log("No location for", value);
-                cb();
+                console.log("No location for", way, err);
             }
-        }.bind(this), cb);
+            callback(way);
+        }.bind(this));
     } else {
-        console.log("No location for", value);
-        cb();
+        callback(way);
     }
 };
 
-ToDB.prototype.pushElement = function(value, cb) {
-    var isInteresting = INTERESTING.some(function(field) {
-        return value.tags.hasOwnProperty(field);
-    });
-    if (isInteresting) {
-        var geohash = GeoHash.encodeGeoHash(value.lat, value.lon);
-        var key = "geo:" + geohash + ":" + value.id;
+
+util.inherits(ToDB, Transform);
+function ToDB() {
+    Transform.call(this, { objectMode: true, highWaterMark: CONCURRENCY });
+}
+
+ToDB.prototype._transform = function(value, encoding, callback) {
+    if (value.lat && value.lon) {
         this.push({
             type: 'put',
-            key: key,
-            value: JSON.stringify(value)
+            key: "p:" + value.id,
+            value: JSON.stringify({
+                lat: value.lat,
+                lon: value.lon
+            })
         });
-        // console.log("push", key);
+
+        var isInteresting = INTERESTING.some(function(field) {
+            return value.tags.hasOwnProperty(field);
+        });
+        if (isInteresting) {
+            var geohash = GeoHash.encodeGeoHash(value.lat, value.lon);
+            var key = "geo:" + geohash + ":" + value.id;
+            // console.log("push", key);
+            this.push({
+                type: 'put',
+                key: key,
+                value: JSON.stringify(value)
+            });
+        }
     }
-    cb();
+    callback();
 };
 
 
@@ -114,7 +129,6 @@ BatchBuffer.prototype.canFlush = function(force) {
     while((force && this.buffer.length > 0) || this.buffer.length >= this.batchSize) {
         var chunks = this.buffer.slice(0, this.batchSize);
         this.buffer = this.buffer.slice(this.batchSize);
-        // console.log("flush", chunks.length);
         this.push(chunks);
     }
 };
@@ -125,30 +139,23 @@ function BatchWriter() {
 }
 
 BatchWriter.prototype._write = function(chunk, encoding, callback) {
-    // console.log("batch", chunk.length);
     db.batch(chunk, callback);
 };
 
 
-process.stdin.pause();
-db.open(function() {
-    pDb.open(function() {
-        var count = 0;
-        process.stdin
-            .on('data', function(data) {
-                count += data.length;
-                // console.log("Read", Math.floor(count/1024/1024), "MB");
-            })
-            .pipe(parseOSM())
-        // TODO: NodeExpander
-            .pipe(new ToDB())
-            .pipe(new BatchBuffer(CONCURRENCY))
-            .pipe(new BatchWriter())
-            .on('end', function() {
-                pDb.close(function() {
-                    db.close();
-                });
-            });
-        process.stdin.resume();
-    });
+db.open(function(err) {
+    if (err) {
+        console.log("open", err);
+        process.exit(1);
+    }
+
+    process.stdin
+        .pipe(parseOSM())
+        .pipe(new Expander())
+        .pipe(new ToDB())
+        .pipe(new BatchBuffer(CONCURRENCY))
+        .pipe(new BatchWriter())
+        .on('end', function() {
+            db.close();
+        });
 });

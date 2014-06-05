@@ -2,7 +2,9 @@ var async = require('async');
 var parseOSM = require('osm-pbf-parser');
 var GeoHash = require('geohash').GeoHash;
 var leveldown = require('leveldown');
-var db = leveldown('./osm');
+var db = leveldown('./osm', {
+    writeBufferSize: 64 * 1024 * 1024
+});
 var Transform = require('stream').Transform;
 var Writable = require('stream').Writable;
 var util = require('util');
@@ -127,10 +129,22 @@ BatchBuffer.prototype.canFlush = function(force) {
 util.inherits(BatchWriter, Writable);
 function BatchWriter() {
     Writable.call(this, { objectMode: true, highWaterMark: 2 });
+    this.count = 0;
+    this.oldCount = 0;
 }
 
 BatchWriter.prototype._write = function(chunk, encoding, callback) {
     db.batch(chunk, callback);
+
+    this.count += chunk.length;
+    if (!this.statsTimeout) {
+        this.statsTimeout = setTimeout(function() {
+            this.statsTimeout = null;
+
+            console.log("Writing", Math.floor((this.count - this.oldCount) / 3), "entries/s");
+            this.oldCount = this.count;
+        }.bind(this), 3 * 1000);
+    }
 };
 
 

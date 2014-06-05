@@ -14,11 +14,13 @@ var INTERESTING = [
     "office", "addr:street", "addr:housenumber"
 ];
 
-var CONCURRENCY = 8;
+var CONCURRENCY = 32;
 
 util.inherits(Expander, Transform);
 function Expander() {
-    Transform.call(this, { objectMode: true, highWaterMark: CONCURRENCY });
+    Transform.call(this, { objectMode: true });
+    this._readableState.highWaterMark = CONCURRENCY;
+    this._writableState.highWaterMark = 2;
 }
 
 Expander.prototype._transform = function(chunk, encoding, callback) {
@@ -74,7 +76,7 @@ Expander.prototype.expandWay = function(way, callback) {
 
 util.inherits(ToDB, Transform);
 function ToDB() {
-    Transform.call(this, { objectMode: true, highWaterMark: CONCURRENCY });
+    Transform.call(this, { objectMode: true, highWaterMark: 1 });
 }
 
 ToDB.prototype._transform = function(value, encoding, callback) {
@@ -108,7 +110,9 @@ ToDB.prototype._transform = function(value, encoding, callback) {
 
 util.inherits(BatchBuffer, Transform);
 function BatchBuffer(batchSize) {
-    Transform.call(this, { objectMode: true, highWaterMark: CONCURRENCY });
+    Transform.call(this, { objectMode: true });
+    this._readableState.highWaterMark = 1;
+    this._writableState.highWaterMark = batchSize;
     this.batchSize = batchSize;
     this.buffer = [];
 }
@@ -135,7 +139,7 @@ BatchBuffer.prototype.canFlush = function(force) {
 
 util.inherits(BatchWriter, Writable);
 function BatchWriter() {
-    Writable.call(this, { objectMode: true, highWaterMark: CONCURRENCY });
+    Writable.call(this, { objectMode: true, highWaterMark: 2 });
 }
 
 BatchWriter.prototype._write = function(chunk, encoding, callback) {

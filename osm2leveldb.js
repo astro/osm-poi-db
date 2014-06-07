@@ -32,26 +32,31 @@ Expander.prototype._transform = function(chunk, encoding, callback) {
                 this.push(way);
             }
             callback();
-        }.bind(true));
+        }.bind(this));
     } else {
         callback();
     }
 };
 
 Expander.prototype.expandWay = function(way, callback) {
-    if (way.ref && way.ref.length > 0) {
+    if (way.refs && way.refs.length > 0) {
+        process.nextTick(function() {
         var lon = 0, lat = 0, len = 0;
-        async.eachLimit(way.nd, CONCURRENCY, function(id, cb) {
+        async.eachLimit(way.refs, CONCURRENCY, function(id, cb) {
             db.get("p:" + id, function(err, data) {
                 if (data) {
-                    data = JSON.parse(data.toString());
-                    lon += data.lon;
-                    lat += data.lat;
+                    var geohash = GeoHash.decodeGeoHash(data.toString());
+                    lon += geohash.longitude[2];
+                    lat += geohash.latitude[2];
                     len++;
+                    cb();
+                } else if (err && err.notFound) {
+                    /* Ignore :-/ */
+                    cb();
                 } else {
                     console.log("get p:" + id, err, data);
+                    cb(err);
                 }
-                cb();
             });
         }, function(err) {
             if (len > 0) {
@@ -62,8 +67,10 @@ Expander.prototype.expandWay = function(way, callback) {
                 console.log("No location for", way, err);
             }
             callback(way);
-        }.bind(this));
+        });
+        });
     } else {
+        console.log("Cannot expand way", way);
         callback(way);
     }
 };

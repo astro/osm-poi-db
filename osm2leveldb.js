@@ -79,20 +79,25 @@ Expander.prototype.expandWay = function(way, callback) {
 util.inherits(ToDB, Transform);
 function ToDB() {
     Transform.call(this, { objectMode: true, highWaterMark: 1 });
+    this.stats = {};
 }
 
 ToDB.prototype._transform = function(value, encoding, callback) {
+    if (!this.stats.hasOwnProperty(value._type)) {
+        this.stats[value._type] = 0;
+    }
+    this.stats[value._type]++;
+
     if (value.lat && value.lon) {
+        var geohash = GeoHash.encodeGeoHash(value.lat, value.lon);
         this.push({
             type: 'put',
             key: "p:" + value.id,
-            value: JSON.stringify({
-                lat: value.lat,
-                lon: value.lon
-            })
+            value: geohash
         });
+        if (value._type !== 'node')
+            console.log("put", value._type, value.id);
 
-        var geohash = GeoHash.encodeGeoHash(value.lat, value.lon);
         var key = "geo:" + geohash + ":" + value.id;
         this.push({
             type: 'put',
@@ -100,6 +105,11 @@ ToDB.prototype._transform = function(value, encoding, callback) {
             value: JSON.stringify(value)
         });
     }
+    callback();
+};
+
+ToDB.prototype._flush = function(callback) {
+    console.log("Processed", this.stats);
     callback();
 };
 

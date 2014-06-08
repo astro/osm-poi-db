@@ -9,6 +9,13 @@ var Transform = require('stream').Transform;
 var Writable = require('stream').Writable;
 var util = require('util');
 
+var INTERESTING = [
+    "amenity", "emergency", "historic",
+    "leisure", "public_transport", "shop",
+    "sport", "tourism", "craft",
+    "office", "addr:street", "addr:housenumber"
+];
+
 var CONCURRENCY = 32;
 
 util.inherits(Expander, Transform);
@@ -98,12 +105,17 @@ ToDB.prototype._transform = function(value, encoding, callback) {
         if (value._type !== 'node')
             console.log("put", value._type, value.id);
 
-        var key = "geo:" + geohash + ":" + value.id;
-        this.push({
-            type: 'put',
-            key: key,
-            value: JSON.stringify(value)
+        var isInteresting = INTERESTING.some(function(field) {
+            return value.tags.hasOwnProperty(field);
         });
+        if (isInteresting) {
+            var key = "geo:" + geohash + ":" + value.id;
+            this.push({
+                type: 'put',
+                key: key,
+                value: JSON.stringify(value)
+            });
+        }
     }
     callback();
 };

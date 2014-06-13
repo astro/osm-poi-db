@@ -65,8 +65,8 @@ exports.locateProximity = function(opts, cb) {
 };
 
 var opts = {
-    lon: 13.8072735,
-    lat: 51.0519905,
+    lon: 13.8057435,
+    lat: 51.0526684, 
     extent: 500,
 };
 function run() {
@@ -81,8 +81,8 @@ function run() {
         }).join(", ");
         console.log("cb", nodes.length, "json:", JSON.stringify(nodes).length, "[" + (t2 - t1) + "ms]", a, ":", xs);
 
-        opts.lon -= 0.001;
-        opts.lat -= 0.00025;
+        opts.lon -= 0.0005;
+        opts.lat -= 0.0001;
         run();
     });
 }

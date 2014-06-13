@@ -21,35 +21,33 @@ var CONCURRENCY = 32;
 util.inherits(Expander, Transform);
 function Expander() {
     Transform.call(this, { objectMode: true });
-    this._readableState.highWaterMark = CONCURRENCY;
-    this._writableState.highWaterMark = 2;
+    this._readableState.highWaterMark = 1;
+    this._writableState.highWaterMark = 1;
 }
 
 Expander.prototype._transform = function(chunk, encoding, callback) {
-    if (chunk.type === 'nodes') {
-        chunk.nodes.forEach(function(node) {
-            node._type = 'node';
-            this.push(node);
-        }.bind(this));
-        callback();
-    } else if (chunk.type === 'way') {
-        chunk.way._type = 'way';
-        this.expandWay(chunk.way, function(way) {
-            if (way.lat && way.lon) {
-                this.push(way);
-            }
+    var pending = 1;
+    var done = function() {
+        pending--;
+        if (pending < 1) {
+            this.push(chunk);
             callback();
-        }.bind(this));
-    } else {
-        callback();
-    }
+        }
+    }.bind(this);
+
+    chunk.forEach(function(item) {
+        if (item.type === 'way') {
+            pending++;
+            this.expandWay(item, done);
+        }
+    }.bind(this));
+    done();
 };
 
 Expander.prototype.expandWay = function(way, callback) {
     if (way.refs && way.refs.length > 0) {
-        process.nextTick(function() {
         var lon = 0, lat = 0, len = 0;
-        async.eachLimit(way.refs, CONCURRENCY, function(id, cb) {
+        async.eachSeries(way.refs, function(id, cb) {
             db.get("p:" + id, function(err, data) {
                 if (data) {
                     var geohash = GeoHash.decodeGeoHash(data.toString());
@@ -73,50 +71,51 @@ Expander.prototype.expandWay = function(way, callback) {
             } else {
                 console.log("No location for", way, err);
             }
-            callback(way);
-        });
+            callback(err, way);
         });
     } else {
         console.log("Cannot expand way", way);
-        callback(way);
+        callback(null, way);
     }
 };
 
 
 util.inherits(ToDB, Transform);
 function ToDB() {
-    Transform.call(this, { objectMode: true, highWaterMark: 1 });
+    Transform.call(this, { objectMode: true, highWaterMark: 0 });
     this.stats = {};
 }
 
-ToDB.prototype._transform = function(value, encoding, callback) {
-    if (!this.stats.hasOwnProperty(value._type)) {
-        this.stats[value._type] = 0;
-    }
-    this.stats[value._type]++;
-
-    if (value.lat && value.lon) {
-        var geohash = GeoHash.encodeGeoHash(value.lat, value.lon);
-        this.push({
-            type: 'put',
-            key: "p:" + value.id,
-            value: geohash
-        });
-        if (value._type !== 'node')
-            console.log("put", value._type, value.id);
-
-        var isInteresting = INTERESTING.some(function(field) {
-            return value.tags.hasOwnProperty(field);
-        });
-        if (isInteresting) {
-            var key = "geo:" + geohash + ":" + value.id;
-            this.push({
-                type: 'put',
-                key: key,
-                value: JSON.stringify(value)
-            });
+ToDB.prototype._transform = function(values, encoding, callback) {
+    var items = [];
+    values.forEach(function(value) {
+        if (!this.stats.hasOwnProperty(value.type)) {
+            this.stats[value.type] = 0;
         }
-    }
+        this.stats[value.type]++;
+
+        if (value.lat && value.lon) {
+            var geohash = GeoHash.encodeGeoHash(value.lat, value.lon);
+            items.push({
+                type: 'put',
+                key: "p:" + value.id,
+                value: geohash
+            });
+
+            var isInteresting = INTERESTING.some(function(field) {
+                return value.tags.hasOwnProperty(field);
+            });
+            if (isInteresting) {
+                var key = "geo:" + geohash + ":" + value.id;
+                items.push({
+                    type: 'put',
+                    key: key,
+                    value: JSON.stringify(value)
+                });
+            }
+        }
+    }.bind(this));
+    this.push(items);
     callback();
 };
 
@@ -129,14 +128,14 @@ ToDB.prototype._flush = function(callback) {
 util.inherits(BatchBuffer, Transform);
 function BatchBuffer(batchSize) {
     Transform.call(this, { objectMode: true });
-    this._readableState.highWaterMark = 1;
+    this._readableState.highWaterMark = 0;
     this._writableState.highWaterMark = batchSize;
     this.batchSize = batchSize;
     this.buffer = [];
 }
 
 BatchBuffer.prototype._transform = function(chunk, encoding, callback) {
-    this.buffer.push(chunk);
+    this.buffer = this.buffer.concat(chunk);
     this.canFlush(false);
     // console.log("left", this.buffer.length, "in buffer");
     callback();
@@ -187,7 +186,7 @@ db.open(function(err) {
         .pipe(parseOSM())
         .pipe(new Expander())
         .pipe(new ToDB())
-        .pipe(new BatchBuffer(CONCURRENCY))
+        // .pipe(new BatchBuffer(CONCURRENCY))
         .pipe(new BatchWriter())
         .on('end', function() {
             db.close();

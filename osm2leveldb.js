@@ -16,7 +16,7 @@ var INTERESTING = [
     "office", "addr:street", "addr:housenumber"
 ];
 
-var CONCURRENCY = 32;
+var CONCURRENCY = 4;
 
 util.inherits(Expander, Transform);
 function Expander() {
@@ -26,27 +26,19 @@ function Expander() {
 }
 
 Expander.prototype._transform = function(chunk, encoding, callback) {
-    var pending = 1;
-    var done = function() {
-        pending--;
-        if (pending < 1) {
-            this.push(chunk);
-            callback();
-        }
-    }.bind(this);
-
-    chunk.forEach(function(item) {
+    async.eachLimit(chunk, CONCURRENCY, function(item, cb) {
         if (item.type === 'way') {
-            pending++;
-            this.expandWay(item, done);
+            this.expandWay(item, cb);
+        } else {
+            cb();
         }
-    }.bind(this));
-    done();
+    }.bind(this), callback);
 };
 
 Expander.prototype.expandWay = function(way, callback) {
     if (way.refs && way.refs.length > 0) {
         var lon = 0, lat = 0, len = 0;
+        // var start = Date.now();
         async.eachSeries(way.refs, function(id, cb) {
             db.get("p:" + id, function(err, data) {
                 if (data) {
@@ -57,17 +49,20 @@ Expander.prototype.expandWay = function(way, callback) {
                     cb();
                 } else if (err && err.notFound) {
                     /* Ignore :-/ */
+                    console.log("get p:" + id, "notFound");
                     cb();
                 } else {
+                    /* Ignore :-/ */
                     console.log("get p:" + id, err, data);
-                    cb(err);
+                    cb();
                 }
             });
         }, function(err) {
+            // var stop = Date.now();
             if (len > 0) {
                 way.lon = lon / len;
                 way.lat = lat / len;
-                // console.log("looked up", way.lon, "/", way.lat, "from", len);
+                // console.log("looked up way", way.lon, "/", way.lat, "from", len, "in", stop - start, "ms");
             } else {
                 console.log("No location for", way, err);
             }

@@ -8,6 +8,70 @@ var db = levelup('./osm', {
     valueEncoding: 'json'
 });
 
+var PREFIX_LENGTH = 6;
+
+util.inherits(GeoHashPrefixGenerator, stream.Readable);
+function GeoHashPrefixGenerator(lon, lat) {
+    stream.Readable.call(this, {
+        objectMode: true,
+        highWaterMark: 0
+    });
+
+    this.iteration = 0;
+    var start = GeoHash.encodeGeoHash(lat, lon).slice(0, PREFIX_LENGTH);
+    this.push(start);
+    var prefixLocation = GeoHash.decodeGeoHash(start);
+    this.lon = prefixLocation.longitude[2];
+    this.lat = prefixLocation.latitude[2];
+    this.step = prefixLocation.longitude[1] - prefixLocation.longitude[0];
+}
+
+GeoHashPrefixGenerator.prototype._read = function() {
+    this.iteration++;
+
+    var distance = (this.iteration - 0.5) * this.step;
+    this.emit('distance', distance);
+    // West:
+    this.readStroke(
+        this.lon - distance,
+        this.lat - distance,
+        0,
+        this.step
+    );
+    // East:
+    this.readStroke(
+        this.lon + distance,
+        this.lat + distance,
+        0,
+        -this.step
+    );
+    // North:
+    this.readStroke(
+        this.lon - distance,
+        this.lat + distance,
+        this.step,
+        0
+    );
+    // South:
+    this.readStroke(
+        this.lon + distance,
+        this.lat - distance,
+        -this.step,
+        0
+    );
+};
+
+GeoHashPrefixGenerator.prototype.readStroke = function(lon, lat, lonDelta, latDelta) {
+    var amount = this.iteration * 2;
+    for(var i = 0; i < amount; i++) {
+        var geohash = GeoHash.encodeGeoHash(lat, lon).slice(0, PREFIX_LENGTH);
+        // console.log("x", i, "lon/lat:", lon, lat, "geohash", geohash);
+        this.push(geohash);
+        lon += lonDelta;
+        lat += latDelta;
+    }
+};
+
 util.inherits(PrefixStream, stream.Readable);
 function PrefixStream(prefix) {
     stream.Readable.call(this, {
@@ -35,65 +99,40 @@ function PrefixStream(prefix) {
 
 var EXTENT = 1000;  // 1km
 
-util.inherits(GeoStream, stream.Readable);
-function GeoStream(options) {
-    stream.Readable.call(this, {
-        objectMode: true
+util.inherits(GeoStream, stream.Transform);
+function GeoStream() {
+    stream.Transform.call(this, {
+        objectMode: true,
+        highWaterMark: 1
     });
-
-    var extent = options.extent || EXTENT;
-    var getAway = function(brng) {
-        return WGS84Util.destinationPoint({
-            coordinates: [options.lat, options.lon]
-        }, brng, extent).coordinates;
-    };
-    var bounds = {
-        n: Number(getAway(0)[0]),
-        e: Number(getAway(90)[1]),
-        s: Number(getAway(180)[0]),
-        w: Number(getAway(270)[1])
-    };
-
-    this.prefixes = [];
-    for(var lon = bounds.w; lon <= bounds.e; ) {
-        var nextLon;
-        for(var lat = bounds.s; lat <= bounds.n; ) {
-            var geoHash = GeoHash.encodeGeoHash(lat, lon).slice(0, 6);
-            this.prefixes.push("geo:" + geoHash);
-
-            var decoded = GeoHash.decodeGeoHash(geoHash);
-            lat = decoded.latitude[1] + 0.00000001;
-            nextLon = decoded.longitude[1] + 0.0000001;
-        }
-        lon = nextLon;
-    }
 }
 
-GeoStream.prototype._read = function(amount) {
+GeoStream.prototype._transform = function(prefix, encoding, callback) {
     var that = this;
-
-    if (!this.stream) {
-        var nextPrefix = this.prefixes.pop();
-        if (nextPrefix) {
-            // console.log("new PrefixStream", nextPrefix, "of", this.prefixes.length + 1);
-            var ps = new PrefixStream(nextPrefix);
-            ps.on('data', function(data) {
-                ps.pause();  // Wait for next read
-                that.push(data.value);
-            });
-            ps.on('end', function() {
-                that.stream = null;
-                that._read();
-            });
-            this.stream = ps;
-        } else {
-            this.push(null);
-            return;
-        }
-    }
-
-    this.stream.resume();
+    var ps = new PrefixStream(prefix);
+    ps.on('data', function(data) {
+        that.push(data.value);
+    });
+    ps.on('end', callback);
 };
 
 
-module.exports = GeoStream;
+util.inherits(AreaStream, stream.Transform);
+function AreaStream(options) {
+    stream.Transform.call(this, {
+        objectMode: true,
+        highWaterMark: 1
+    });
+
+    var pg = new GeoHashPrefixGenerator(options.lon, options.lat);
+    pg.on('distance', this.emit.bind(this, 'distance'));
+    var gs = new GeoStream();
+    pg.pipe(gs).pipe(this);
+}
+
+AreaStream.prototype._transform = function(data, encoding, callback) {
+    this.push(data);
+    callback();
+};
+
+module.exports = AreaStream;

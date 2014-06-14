@@ -106,6 +106,7 @@ ToDB.prototype._transform = function(values, encoding, callback) {
                 return value.tags.hasOwnProperty(field);
             });
             if (isInteresting) {
+                delete value.info;
                 var key = "geo:" + geohash + ":" + value.id;
                 items.push({
                     type: 'put',

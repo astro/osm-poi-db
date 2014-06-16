@@ -26,13 +26,16 @@ function Expander() {
 }
 
 Expander.prototype._transform = function(chunk, encoding, callback) {
-    async.eachLimit(chunk, CONCURRENCY, function(item, cb) {
+    async.eachSeries(chunk, function(item, cb) {
         if (item.type === 'way') {
             this.expandWay(item, cb);
         } else {
-            cb();
+            setImmediate(cb);
         }
-    }.bind(this), callback);
+    }.bind(this), function(err) {
+        this.push(chunk);
+        callback(err);
+    }.bind(this));
 };
 
 Expander.prototype.expandWay = function(way, callback) {

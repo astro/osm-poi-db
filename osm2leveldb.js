@@ -122,6 +122,35 @@ ToDB.prototype._flush = function(callback) {
 };
 
 
+util.inherits(BatchBuffer, Transform);
+function BatchBuffer(batchSize) {
+    Transform.call(this, { objectMode: true });
+    this._readableState.highWaterMark = 1;
+    this._writableState.highWaterMark = batchSize;
+    this.batchSize = batchSize;
+    this.buffer = [];
+}
+
+BatchBuffer.prototype._transform = function(chunk, encoding, callback) {
+    this.buffer.push(chunk);
+    this.canFlush(false);
+    callback();
+};
+
+BatchBuffer.prototype._flush = function(callback) {
+    this.canFlush(true);
+    callback();
+};
+
+BatchBuffer.prototype.canFlush = function(force) {
+    while((force && this.buffer.length > 0) || this.buffer.length >= this.batchSize) {
+        var chunks = this.buffer.slice(0, this.batchSize);
+        this.buffer = this.buffer.slice(this.batchSize);
+        this.push(chunks);
+    }
+};
+
+
 util.inherits(BatchWriter, Writable);
 function BatchWriter() {
     Writable.call(this, { objectMode: true, highWaterMark: 2 });
@@ -151,9 +180,10 @@ db.open(function(err) {
     }
 
     process.stdin
-        .pipe(parseOSM())
+        .pipe(parseOSM({ parseInfo: false }))
         .pipe(new Expander())
         .pipe(new ToDB())
+        .pipe(new BatchBuffer(CONCURRENCY))
         .pipe(new BatchWriter())
         .on('end', function() {
             db.close();

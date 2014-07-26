@@ -8,7 +8,7 @@ var db = levelup('./osm', {
     valueEncoding: 'json'
 });
 
-var PREFIX_LENGTH = 6;
+var PREFIX_LENGTH = 7;
 
 util.inherits(GeoHashPrefixGenerator, stream.Readable);
 function GeoHashPrefixGenerator(lon, lat) {
@@ -19,6 +19,7 @@ function GeoHashPrefixGenerator(lon, lat) {
 
     this.iteration = 0;
     var start = GeoHash.encodeGeoHash(lat, lon).slice(0, PREFIX_LENGTH);
+    // push center tile
     this.push(start);
     var prefixLocation = GeoHash.decodeGeoHash(start);
     this.lon = prefixLocation.longitude[2];
@@ -30,7 +31,14 @@ GeoHashPrefixGenerator.prototype._read = function() {
     this.iteration++;
 
     var distance = (this.iteration - 0.5) * this.step;
-    this.emit('distance', distance);
+    var minDistance = WGS84Util.distanceBetween({
+        coordinates: [this.lat + (this.iteration - 2) * this.step, this.lon]
+    }, {
+        coordinates: [this.lat - this.step, this.lon]
+    });
+    // console.log("distance", distance, minDistance);
+    // Signal that all nodes up to this distance should have occured
+    this.emit('distance', minDistance);
     // West:
     this.readStroke(
         this.lon - distance,
@@ -65,12 +73,43 @@ GeoHashPrefixGenerator.prototype.readStroke = function(lon, lat, lonDelta, latDe
     var amount = this.iteration * 2;
     for(var i = 0; i < amount; i++) {
         var geohash = GeoHash.encodeGeoHash(lat, lon).slice(0, PREFIX_LENGTH);
-        // console.log("x", i, "lon/lat:", lon, lat, "geohash", geohash);
+        // console.log("it", this.iteration, "i", i, "lon/lat:", lon, lat, "geohash", geohash);
         this.push(geohash);
         lon += lonDelta;
         lat += latDelta;
     }
 };
+
+GeoHashPrefixGenerator.prototype.destroy = function() {
+    this._read = function() {
+        this.push(null);
+    };
+};
+
+
+util.inherits(DedupStream, stream.Transform);
+function DedupStream() {
+    stream.Transform.call(this, {
+        objectMode: true
+    });
+    this.seen = {};
+}
+
+DedupStream.prototype._transform = function(data, encoding, cb) {
+    if (data.constructor !== Array) {
+        data = [data];
+    }
+
+    data.forEach(function(d) {
+        if (!this.seen.hasOwnProperty(d)) {
+            this.seen[d] = true;
+            this.push(d);
+        }
+    }.bind(this));
+
+    cb();
+};
+
 
 util.inherits(PrefixStream, stream.Readable);
 function PrefixStream(prefix) {
@@ -109,7 +148,7 @@ function GeoStream() {
 
 GeoStream.prototype._transform = function(prefix, encoding, callback) {
     var that = this;
-    var ps = new PrefixStream(prefix);
+    var ps = new PrefixStream("geo:" + prefix);
     ps.on('data', function(data) {
         that.push(data.value);
     });
@@ -125,9 +164,15 @@ function AreaStream(options) {
     });
 
     var pg = new GeoHashPrefixGenerator(options.lon, options.lat);
-    pg.on('distance', this.emit.bind(this, 'distance'));
+    pg.on('distance', function(minDistance) {
+        this.emit('distance', minDistance);
+        if (minDistance >= options.extent) {
+            pg.destroy();
+        }
+    }.bind(this));
+    var dedup = new DedupStream();
     var gs = new GeoStream();
-    pg.pipe(gs).pipe(this);
+    pg.pipe(dedup).pipe(gs).pipe(this);
 }
 
 AreaStream.prototype._transform = function(data, encoding, callback) {

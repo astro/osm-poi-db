@@ -16,17 +16,17 @@ var INTERESTING = [
     "office", "addr:street", "addr:housenumber"
 ];
 
-var CONCURRENCY = 128;
+var CONCURRENCY = 32;
 
 util.inherits(Expander, Transform);
 function Expander() {
     Transform.call(this, { objectMode: true });
     this._readableState.highWaterMark = CONCURRENCY;
-    this._writableState.highWaterMark = CONCURRENCY;
+    this._writableState.highWaterMark = 1;
 }
 
 Expander.prototype._transform = function(values, encoding, callback) {
-    async.each(values, function(value, cb) {
+    async.eachSeries(values, function(value, cb) {
         if (value.type === 'way') {
             this.expandWay(value, function(err) {
                 this.push(value);
@@ -34,7 +34,7 @@ Expander.prototype._transform = function(values, encoding, callback) {
             }.bind(this));
         } else {
             this.push(value);
-            cb();
+            setImmediate(cb);
         }
     }.bind(this), callback);
 };
@@ -43,7 +43,7 @@ Expander.prototype.expandWay = function(way, callback) {
     if (way.refs && way.refs.length > 0) {
         var lon = 0, lat = 0, len = 0;
         // var start = Date.now();
-        async.eachSeries(way.refs, function(id, cb) {
+        async.eachLimit(way.refs, CONCURRENCY, function(id, cb) {
             db.get("p:" + id, function(err, data) {
                 if (data) {
                     var geohash = GeoHash.decodeGeoHash(data.toString());

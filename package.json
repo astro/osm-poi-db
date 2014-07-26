@@ -1,20 +1,24 @@
 {
   "name": "osm-poi-db",
   "description": "Extract POIs from OSM PBFs and put them into LevelDB, ready for nearby query",
-  "version": "0.0.0",
-  "description": "",
+  "keywords": ["osm", "openstreetmap", "levledb", "geodb", "spatial", "geolocation", "poi"],
+  "version": "0.0.2",
   "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "bin": {
+    "osm2leveldb": "osm2leveldb.js"
   },
-  "author": "",
-  "license": "AGPL",
+  "author": "Astro",
+  "license": "MIT",
   "dependencies": {
     "geohash": "~0.0.1",
     "levelup": "~0.18.3",
     "leveldown": "~0.10.2",
-    "osm-pbf-parser": "~1.1.1",
+    "osm-pbf-parser": "~1.2.0",
     "async": "~0.9.0",
     "wgs84-util": "~1.0.0"
+  },
+  "homepage": "https://github.com/astro/osm-poi-db",
+  "bugs": {
+    "url": "https://github.com/astro/osm-poi-db/issues"
   }
 }

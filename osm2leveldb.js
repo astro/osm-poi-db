@@ -16,26 +16,27 @@ var INTERESTING = [
     "office", "addr:street", "addr:housenumber"
 ];
 
-var CONCURRENCY = 4;
+var CONCURRENCY = 128;
 
 util.inherits(Expander, Transform);
 function Expander() {
     Transform.call(this, { objectMode: true });
-    this._readableState.highWaterMark = 1;
-    this._writableState.highWaterMark = 1;
+    this._readableState.highWaterMark = CONCURRENCY;
+    this._writableState.highWaterMark = CONCURRENCY;
 }
 
-Expander.prototype._transform = function(chunk, encoding, callback) {
-    async.eachSeries(chunk, function(item, cb) {
-        if (item.type === 'way') {
-            this.expandWay(item, cb);
+Expander.prototype._transform = function(values, encoding, callback) {
+    async.each(values, function(value, cb) {
+        if (value.type === 'way') {
+            this.expandWay(value, function(err) {
+                this.push(value);
+                cb(err);
+            }.bind(this));
         } else {
-            setImmediate(cb);
+            this.push(value);
+            cb();
         }
-    }.bind(this), function(err) {
-        this.push(chunk);
-        callback(err);
-    }.bind(this));
+    }.bind(this), callback);
 };
 
 Expander.prototype.expandWay = function(way, callback) {
@@ -84,37 +85,34 @@ function ToDB() {
     this.stats = {};
 }
 
-ToDB.prototype._transform = function(values, encoding, callback) {
-    var items = [];
-    values.forEach(function(value) {
-        if (!this.stats.hasOwnProperty(value.type)) {
-            this.stats[value.type] = 0;
-        }
-        this.stats[value.type]++;
+ToDB.prototype._transform = function(value, encoding, callback) {
+    if (!this.stats.hasOwnProperty(value.type)) {
+        this.stats[value.type] = 0;
+    }
+    this.stats[value.type]++;
 
-        if (value.lat && value.lon) {
-            var geohash = GeoHash.encodeGeoHash(value.lat, value.lon);
-            items.push({
+    if (value.lat && value.lon) {
+        var geohash = GeoHash.encodeGeoHash(value.lat, value.lon);
+        this.push({
+            type: 'put',
+            key: "p:" + value.id,
+            value: geohash
+        });
+
+        var isInteresting = INTERESTING.some(function(field) {
+            return value.tags.hasOwnProperty(field);
+        });
+        if (isInteresting) {
+            delete value.info;
+            var key = "geo:" + geohash + ":" + value.id;
+            this.push({
                 type: 'put',
-                key: "p:" + value.id,
-                value: geohash
+                key: key,
+                value: JSON.stringify(value)
             });
-
-            var isInteresting = INTERESTING.some(function(field) {
-                return value.tags.hasOwnProperty(field);
-            });
-            if (isInteresting) {
-                delete value.info;
-                var key = "geo:" + geohash + ":" + value.id;
-                items.push({
-                    type: 'put',
-                    key: key,
-                    value: JSON.stringify(value)
-                });
-            }
         }
-    }.bind(this));
-    this.push(items);
+    }
+
     callback();
 };
 
